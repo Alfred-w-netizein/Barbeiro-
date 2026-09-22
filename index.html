@@ -2570,12 +2570,8 @@
         let selectedServices = [];
         let barberAvailability = {};
         let _appointmentsCache = [];
-        let _firebaseInitialized = false;
-        let _locallyCompletedIds = [];
         let _completedIdsFromFirebase = [];
-        let _deletedAppointmentIds = [];
-        let _isProcessingQueue = false;
-        let _completionQueue = [];
+        let _firebaseInitialized = false;
 
         const timeSlots = [
             '09:00', '09:30', '10:00', '10:30', '11:00',
@@ -2591,72 +2587,50 @@
             return window._firebaseReady && window._db;
         }
 
+        // ========== AGENDAMENTOS (somente Firebase) ==========
         async function getAppointmentsFS() {
-            if (!isFirebaseReady()) return getAppointmentsLS();
+            if (!isFirebaseReady()) return [];
             try {
                 const col = window._collection(window._db, 'appointments');
                 const snap = await window._getDocs(col);
                 const list = [];
-                snap.forEach(d => {
-                    const normalizedId = String(d.id);
-                    if (_deletedAppointmentIds.includes(normalizedId)) return;
-                    list.push({ id: d.id, ...d.data() });
-                });
+                snap.forEach(d => list.push({ id: d.id, ...d.data() }));
                 _appointmentsCache = list;
                 return list;
             } catch (e) {
-                return getAppointmentsLS();
+                console.warn('Erro ao buscar agendamentos:', e);
+                return [];
             }
         }
 
         async function addAppointmentFS(data) {
-            if (!isFirebaseReady()) {
-                const list = getAppointmentsLS();
-                list.push(data);
-                localStorage.setItem('barbearia_appointments', JSON.stringify(list));
-                return data;
-            }
+            if (!isFirebaseReady()) return data;
             try {
                 const col = window._collection(window._db, 'appointments');
                 const ref = await window._addDoc(col, data);
                 data.id = ref.id;
                 return data;
             } catch (e) {
-                const list = getAppointmentsLS();
-                list.push(data);
-                localStorage.setItem('barbearia_appointments', JSON.stringify(list));
+                console.warn('Erro ao adicionar agendamento:', e);
                 return data;
             }
         }
 
         async function updateAppointmentStatusFS(id, status) {
-            const normalizedId = String(id);
-            const list = getAppointmentsLS();
-            const a = list.find(x => String(x.id) === normalizedId);
-            if (a) {
-                a.status = status;
-                localStorage.setItem('barbearia_appointments', JSON.stringify(list));
-            }
-
             if (!isFirebaseReady()) return;
             try {
-                await window._updateDoc(window._doc(window._db, 'appointments', normalizedId), { status: status });
+                await window._updateDoc(window._doc(window._db, 'appointments', String(id)), { status: status });
             } catch (e) {
-                console.warn('Erro ao atualizar status no Firebase:', e);
+                console.warn('Erro ao atualizar status:', e);
             }
         }
 
         async function deleteAppointmentFS(id) {
-            const normalizedId = String(id);
-            let list = getAppointmentsLS();
-            list = list.filter(a => String(a.id) !== normalizedId);
-            localStorage.setItem('barbearia_appointments', JSON.stringify(list));
-
             if (!isFirebaseReady()) return;
             try {
-                await window._deleteDoc(window._doc(window._db, 'appointments', normalizedId));
+                await window._deleteDoc(window._doc(window._db, 'appointments', String(id)));
             } catch (e) {
-                console.warn('Erro ao excluir agendamento no Firebase:', e);
+                console.warn('Erro ao excluir agendamento:', e);
             }
         }
 
@@ -2669,10 +2643,9 @@
             }
         }
 
-
-
+        // ========== DISPONIBILIDADE ==========
         async function getAvailabilityFS() {
-            if (!isFirebaseReady()) return getAvailabilityLS();
+            if (!isFirebaseReady()) return { domingo: [], segunda: [], terca: [], quarta: [], quinta: [], sexta: [], sabado: [] };
             try {
                 const ref = window._doc(window._db, 'availability', 'schedule');
                 const snap = await window._getDoc(ref);
@@ -2680,116 +2653,44 @@
                     barberAvailability = snap.data();
                     return barberAvailability;
                 }
-                return getAvailabilityLS();
+                return { domingo: [], segunda: [], terca: [], quarta: [], quinta: [], sexta: [], sabado: [] };
             } catch (e) {
-                return getAvailabilityLS();
+                return { domingo: [], segunda: [], terca: [], quarta: [], quinta: [], sexta: [], sabado: [] };
             }
         }
 
         async function saveAvailabilityFS(data) {
-            if (!isFirebaseReady()) {
-                localStorage.setItem('barbearia_availability', JSON.stringify(data));
-                return;
-            }
+            if (!isFirebaseReady()) return;
             try {
                 await window._setDoc(window._doc(window._db, 'availability', 'schedule'), data);
             } catch (e) {
-                localStorage.setItem('barbearia_availability', JSON.stringify(data));
+                console.warn('Erro ao salvar disponibilidade:', e);
             }
         }
 
-        function listenAppointments(callback) {
-            if (!isFirebaseReady()) return;
-            const col = window._collection(window._db, 'appointments');
-            window._onSnapshot(col, (snap) => {
-                const list = [];
-                snap.forEach(d => {
-                    const normalizedId = String(d.id);
-                    if (_deletedAppointmentIds.includes(normalizedId)) return;
-                    list.push({ id: d.id, ...d.data() });
-                });
-                _appointmentsCache = list;
-                if (callback) callback(list);
-            });
-        }
-
-        function listenAvailability(callback) {
-            if (!isFirebaseReady()) return;
-            const ref = window._doc(window._db, 'availability', 'schedule');
-            window._onSnapshot(ref, (snap) => {
-                if (snap.exists()) {
-                    barberAvailability = snap.data();
-                    if (callback) callback(barberAvailability);
-                }
-            });
-        }
-
-        function getAppointmentsLS() {
-            const data = localStorage.getItem('barbearia_appointments');
-            const list = data ? JSON.parse(data) : [];
-            _appointmentsCache = list;
-            return list;
-        }
-
-        function getAvailabilityLS() {
-            const data = localStorage.getItem('barbearia_availability');
-            const defaults = { domingo: [], segunda: [], terca: [], quarta: [], quinta: [], sexta: [], sabado: [] };
-            return data ? JSON.parse(data) : defaults;
-        }
-
-        function getLocallyCompletedIds() {
+        // ========== CONFIG ==========
+        async function getConfigFS() {
+            if (!isFirebaseReady()) return { whatsappEnabled: true };
             try {
-                const data = localStorage.getItem('barbearia_completed_ids');
-                return data ? JSON.parse(data) : [];
+                const ref = window._doc(window._db, 'settings', 'config');
+                const snap = await window._getDoc(ref);
+                if (snap.exists()) return snap.data();
+                return { whatsappEnabled: true };
             } catch (e) {
-                return [];
+                return { whatsappEnabled: true };
             }
         }
 
-        function saveLocallyCompletedIds() {
-            localStorage.setItem('barbearia_completed_ids', JSON.stringify(_locallyCompletedIds));
-        }
-
-        function addLocallyCompletedId(id) {
-            if (!_locallyCompletedIds.includes(id)) {
-                _locallyCompletedIds.push(id);
-            }
-            saveLocallyCompletedIds();
-        }
-
-        function removeLocallyCompletedId(id) {
-            _locallyCompletedIds = _locallyCompletedIds.filter(x => x !== id);
-            saveLocallyCompletedIds();
-        }
-
-        function getDeletedAppointmentIds() {
+        async function saveConfigFS(config) {
+            if (!isFirebaseReady()) return;
             try {
-                const data = localStorage.getItem('barbearia_deleted_ids');
-                return data ? JSON.parse(data) : [];
+                await window._setDoc(window._doc(window._db, 'settings', 'config'), config);
             } catch (e) {
-                return [];
+                console.warn('Erro ao salvar config:', e);
             }
         }
 
-        function saveDeletedAppointmentIds() {
-            localStorage.setItem('barbearia_deleted_ids', JSON.stringify(_deletedAppointmentIds));
-        }
-
-        function addDeletedAppointmentId(id) {
-            const normalizedId = String(id);
-            if (!_deletedAppointmentIds.includes(normalizedId)) {
-                _deletedAppointmentIds.push(normalizedId);
-            }
-            saveDeletedAppointmentIds();
-        }
-
-        function removeDeletedAppointmentId(id) {
-            const normalizedId = String(id);
-            _deletedAppointmentIds = _deletedAppointmentIds.filter(x => x !== normalizedId);
-            saveDeletedAppointmentIds();
-        }
-
-        // ========== COMPLETED APPOINTMENTS (Firebase) ==========
+        // ========== COMPLETED (Firebase) ==========
         async function getCompletedAppointmentsFS() {
             if (!isFirebaseReady()) return [];
             try {
@@ -2799,7 +2700,6 @@
                 snap.forEach(d => list.push(d.id));
                 return list;
             } catch (e) {
-                console.warn('Erro ao buscar completedAppointments:', e);
                 return [];
             }
         }
@@ -2817,6 +2717,29 @@
             }
         }
 
+        // ========== LISTENERS (tempo real) ==========
+        function listenAppointments(callback) {
+            if (!isFirebaseReady()) return;
+            const col = window._collection(window._db, 'appointments');
+            window._onSnapshot(col, (snap) => {
+                const list = [];
+                snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+                _appointmentsCache = list;
+                if (callback) callback(list);
+            });
+        }
+
+        function listenAvailability(callback) {
+            if (!isFirebaseReady()) return;
+            const ref = window._doc(window._db, 'availability', 'schedule');
+            window._onSnapshot(ref, (snap) => {
+                if (snap.exists()) {
+                    barberAvailability = snap.data();
+                    if (callback) callback(barberAvailability);
+                }
+            });
+        }
+
         function listenCompletedAppointments(callback) {
             if (!isFirebaseReady()) return;
             const col = window._collection(window._db, 'completedAppointments');
@@ -2824,72 +2747,21 @@
                 const list = [];
                 snap.forEach(d => list.push(d.id));
                 _completedIdsFromFirebase = list;
-                // Mescla com a lista local
-                let changed = false;
-                list.forEach(id => {
-                    if (!_locallyCompletedIds.includes(id)) {
-                        _locallyCompletedIds.push(id);
-                        changed = true;
-                    }
-                });
-                if (changed) {
-                    saveLocallyCompletedIds();
-                    renderAdminTable();
-                    renderTimeSlots();
-                    updateSummary();
-                }
                 if (callback) callback(list);
             });
         }
 
+        // ✅ CORRIGIDO: fallback pelo status do próprio agendamento
         function isCompletedId(id) {
-            if (_locallyCompletedIds.includes(id) || _completedIdsFromFirebase.includes(id)) return true;
-            const appointment = _appointmentsCache.find(app => app.id === id);
-            return appointment && String(appointment.status).trim() === 'Concluído';
+            const normalizedId = String(id);
+            if (_completedIdsFromFirebase.includes(normalizedId)) return true;
+            const app = _appointmentsCache.find(a => String(a.id) === normalizedId);
+            if (app && String(app.status).trim() === 'Concluído') return true;
+            return false;
         }
 
-        // ========== FILA DE PROCESSAMENTO ==========
-        async function processCompletionQueue() {
-            if (_isProcessingQueue || _completionQueue.length === 0) return;
-            _isProcessingQueue = true;
-            while (_completionQueue.length > 0) {
-                const task = _completionQueue.shift();
-                try {
-                    await task();
-                } catch (e) {
-                    console.warn('Erro ao processar tarefa da fila:', e);
-                }
-            }
-            _isProcessingQueue = false;
-        }
-
-        function queueCompletion(task) {
-            _completionQueue.push(task);
-            processCompletionQueue();
-        }
-
+        // ========== INIT ==========
         async function initApp() {
-            _locallyCompletedIds = getLocallyCompletedIds();
-            _deletedAppointmentIds = getDeletedAppointmentIds();
-
-            // Busca concluídos do Firebase ao iniciar
-            if (isFirebaseReady()) {
-                try {
-                    const firebaseCompleted = await getCompletedAppointmentsFS();
-                    _completedIdsFromFirebase = firebaseCompleted;
-                    let changed = false;
-                    firebaseCompleted.forEach(id => {
-                        if (!_locallyCompletedIds.includes(id)) {
-                            _locallyCompletedIds.push(id);
-                            changed = true;
-                        }
-                    });
-                    if (changed) saveLocallyCompletedIds();
-                } catch (e) {
-                    console.warn('Erro ao sincronizar concluídos do Firebase:', e);
-                }
-            }
-
             barberAvailability = await getAvailabilityFS();
             const config = await getConfigFS();
             if (config && typeof config.whatsappEnabled === 'boolean') {
@@ -2897,27 +2769,14 @@
             }
             await getAppointmentsFS();
 
-
             renderAvailabilityEditor();
             renderAdminCalendar();
-
             updateConfigStatus();
 
-
             if (isFirebaseReady()) {
-                listenAppointments(() => {
-                    renderAdminTable();
-
-                });
-                listenAvailability(() => {
-
-                    renderAvailabilityEditor();
-                });
-                listenCompletedAppointments(() => {
-                    renderAdminTable();
-
-
-                });
+                listenAppointments(() => { renderAdminTable(); renderAdminCalendar(); });
+                listenAvailability(() => { renderAvailabilityEditor(); });
+                listenCompletedAppointments(() => { renderAdminTable(); renderAdminCalendar(); });
                 _firebaseInitialized = true;
             }
         }
@@ -2931,6 +2790,7 @@
             }
         });
 
+        // ========== CALENDÁRIO CLIENTE (não usado no admin, mas mantido) ==========
         function renderCalendar() {
             const year = currentDate.getFullYear();
             const month = currentDate.getMonth();
@@ -2981,6 +2841,7 @@
 
         function renderTimeSlots() {
             const container = document.getElementById('time-grid');
+            if (!container) return;
             container.innerHTML = '';
             if (!selectedDate) {
                 container.innerHTML = '<div style="color: var(--text-secondary); font-size: 14px;">Selecione uma data para ver os horários disponíveis.</div>';
@@ -2989,7 +2850,7 @@
             const availableTimes = getAvailableTimesForDate(selectedDate);
             const bookedTimes = getBookedTimesForDate(selectedDate);
             if (availableTimes.length === 0) {
-                container.innerHTML = '<div style="color: var(--text-secondary); font-size: 14px;">Nenhum horário disponível para o dia selecionado. Defina disponibilidade no acesso do barbeiro.</div>';
+                container.innerHTML = '<div style="color: var(--text-secondary); font-size: 14px;">Nenhum horário disponível para o dia selecionado.</div>';
                 return;
             }
             availableTimes.forEach(time => {
@@ -2998,12 +2859,8 @@
                 div.textContent = time;
                 const isBooked = bookedTimes.includes(time);
                 const isSelected = selectedTime === time;
-                if (isBooked) {
-                    div.classList.add('disabled');
-                }
-                if (isSelected) {
-                    div.classList.add('selected');
-                }
+                if (isBooked) div.classList.add('disabled');
+                if (isSelected) div.classList.add('selected');
                 div.onclick = function () {
                     if (isBooked) {
                         showToast('Horário indisponível', 'Este horário já foi reservado. Escolha outro horário.');
@@ -3024,7 +2881,6 @@
 
         function isAppointmentActive(appointment) {
             if (!appointment || !appointment.status) return false;
-            // Se o ID está na lista de concluídos (local ou Firebase), considera inativo
             if (isCompletedId(appointment.id)) return false;
             const status = String(appointment.status).trim();
             return status !== 'Concluído';
@@ -3101,72 +2957,60 @@
 
         async function deleteAppointment(id) {
             const normalizedId = String(id);
-            addDeletedAppointmentId(normalizedId);
-            removeLocallyCompletedId(normalizedId);
-            _completedIdsFromFirebase = _completedIdsFromFirebase.filter(completedId => String(completedId) !== normalizedId);
-            _appointmentsCache = _appointmentsCache.filter(appointment => String(appointment.id) !== normalizedId);
-
-            const list = getAppointmentsLS().filter(appointment => String(appointment.id) !== normalizedId);
-            localStorage.setItem('barbearia_appointments', JSON.stringify(list));
-
-            renderAdminTable();
-            renderHistory();
-            renderTimeSlots();
             await deleteAppointmentFS(normalizedId);
             await deleteCompletedAppointmentFS(normalizedId);
-            await getAppointmentsFS();
+
+            _appointmentsCache = _appointmentsCache.filter(a => String(a.id) !== normalizedId);
+            _completedIdsFromFirebase = _completedIdsFromFirebase.filter(x => String(x) !== normalizedId);
+
             renderAdminTable();
+            renderAdminCalendar();
             renderHistory();
             renderTimeSlots();
             showToast('Agendamento excluído', 'O agendamento foi removido com sucesso.');
         }
 
+        // ✅ CORRIGIDO: grava o status ANTES de tentar criar o doc em completedAppointments
+        // Se a segunda escrita falhar, o status já está persistido e o isCompletedId encontra pelo fallback.
         async function markAppointmentDone(id) {
-            const appointment = _appointmentsCache.find(a => a.id === id);
+            const normalizedId = String(id);
+            const appointment = _appointmentsCache.find(a => String(a.id) === normalizedId);
             if (!appointment) {
                 showToast('Erro', 'Agendamento não encontrado.');
                 return;
             }
-
-            // Evita clique duplo no mesmo agendamento
-            if (isCompletedId(id)) {
+            if (isCompletedId(normalizedId)) {
                 showToast('Já concluído', 'Este agendamento já foi marcado como feito.');
                 return;
             }
 
-            // 1. Adiciona à lista local de concluídos IMEDIATAMENTE
-            addLocallyCompletedId(id);
+            // 1) Atualiza status no doc original — FONTE DE VERDADE
+            await updateAppointmentStatusFS(normalizedId, 'Concluído');
 
-            // 2. Atualiza o cache local
-            const idx = _appointmentsCache.findIndex(a => a.id === id);
-            if (idx !== -1) {
-                _appointmentsCache[idx].status = 'Concluído';
+            // 2) Atualiza cache local imediatamente (UI responde na hora)
+            const idx = _appointmentsCache.findIndex(a => String(a.id) === normalizedId);
+            if (idx !== -1) _appointmentsCache[idx].status = 'Concluído';
+
+            // 3) Tenta criar doc em completedAppointments (para o histórico/consulta do cliente)
+            try {
+                await addCompletedAppointmentFS(normalizedId, {
+                    date: appointment.date,
+                    time: appointment.time,
+                    services: appointment.services,
+                    clientName: appointment.name,
+                    total: appointment.total
+                });
+                if (!_completedIdsFromFirebase.includes(normalizedId)) {
+                    _completedIdsFromFirebase.push(normalizedId);
+                }
+            } catch (e) {
+                console.warn('Falha ao gravar em completedAppointments, mas o status já foi atualizado:', e);
             }
 
-            // 3. Re-renderiza tudo na hora — o horário já fica livre
             renderAdminTable();
+            renderAdminCalendar();
+            renderHistory();
             renderTimeSlots();
-            updateSummary();
-
-            // 4. Coloca na fila para sincronizar com o Firebase em background
-            // Isso permite marcar vários rapidamente sem travar
-            queueCompletion(async () => {
-                try {
-                    // Atualiza status no documento original
-                    await updateAppointmentStatusFS(id, 'Concluído');
-                    // Cria documento na coleção completedAppointments (sincroniza entre dispositivos)
-                    await addCompletedAppointmentFS(id, {
-                        date: appointment.date,
-                        time: appointment.time,
-                        services: appointment.services,
-                        clientName: appointment.name
-                    });
-                    console.log('Sincronizado com Firebase:', id);
-                } catch (e) {
-                    console.warn('Falha ao sincronizar com Firebase:', e);
-                }
-            });
-
             showToast('Agendamento concluído', 'Este horário ficou disponível para outro cliente.');
         }
 
@@ -3250,9 +3094,7 @@
         }
 
         function sendWhatsAppNotification(appointment) {
-            if (!BARBER_WHATSAPP || !whatsappEnabled) {
-                return;
-            }
+            if (!BARBER_WHATSAPP || !whatsappEnabled) return;
             const message = encodeURIComponent(
                 'NOVO AGENDAMENTO — BARBEARIA SHARK\n\n' +
                 'Cliente: ' + appointment.name + '\n' +
@@ -3266,47 +3108,9 @@
             window.open('https://wa.me/' + BARBER_WHATSAPP + '?text=' + message, '_blank');
         }
 
-        function getConfigLS() {
-            const data = localStorage.getItem('barbearia_config');
-            return data ? JSON.parse(data) : { whatsappEnabled: true };
-        }
-
-        async function getConfigFS() {
-            if (!isFirebaseReady()) return getConfigLS();
-            try {
-                const ref = window._doc(window._db, 'settings', 'config');
-                const snap = await window._getDoc(ref);
-                if (snap.exists()) return snap.data();
-                return getConfigLS();
-            } catch (e) {
-                return getConfigLS();
-            }
-        }
-
-        function saveConfigLS(config) {
-            localStorage.setItem('barbearia_config', JSON.stringify(config));
-        }
-
-        async function saveConfigFS(config) {
-            if (!isFirebaseReady()) {
-                saveConfigLS(config);
-                return;
-            }
-            try {
-                await window._setDoc(window._doc(window._db, 'settings', 'config'), config);
-            } catch (e) {
-                saveConfigLS(config);
-            }
-        }
-
-        async function saveConfig(config) {
-            saveConfigLS(config);
-            await saveConfigFS(config);
-        }
-
         async function toggleWhatsAppEnabled(input) {
             whatsappEnabled = input.checked;
-            await saveConfig({ whatsappEnabled });
+            await saveConfigFS({ whatsappEnabled });
             updateConfigStatus();
             showToast('WhatsApp atualizado', whatsappEnabled ? 'Notificações por WhatsApp ativadas.' : 'Notificações por WhatsApp desativadas.');
         }
@@ -3319,6 +3123,7 @@
 
         function renderAvailabilityEditor() {
             const container = document.getElementById('availability-days');
+            if (!container) return;
             container.innerHTML = '';
             weekDayKeys.forEach(key => {
                 const dayName = key === 'domingo' ? 'Domingo' : key === 'segunda' ? 'Segunda' : key === 'terca' ? 'Terça' : key === 'quarta' ? 'Quarta' : key === 'quinta' ? 'Quinta' : key === 'sexta' ? 'Sexta' : 'Sábado';
@@ -3331,9 +3136,7 @@
                     const button = document.createElement('div');
                     button.className = 'availability-time' + (barberAvailability[key] && barberAvailability[key].includes(time) ? ' selected' : '');
                     button.textContent = time;
-                    button.onclick = function () {
-                        toggleAvailabilityTime(key, time, button);
-                    };
+                    button.onclick = function () { toggleAvailabilityTime(key, time, button); };
                     timesWrapper.appendChild(button);
                 });
                 daySection.appendChild(timesWrapper);
@@ -3391,8 +3194,8 @@
             updateConfigStatus();
             renderAvailabilityEditor();
             if (isFirebaseReady()) {
-                listenAppointments(() => { renderAdminTable(); });
-                listenCompletedAppointments(() => { renderAdminTable(); });
+                listenAppointments(() => { renderAdminTable(); renderAdminCalendar(); });
+                listenCompletedAppointments(() => { renderAdminTable(); renderAdminCalendar(); });
             }
         }
 
@@ -3425,8 +3228,6 @@
             }
         }
 
-
-
         function getStatusClass(status) {
             return 'status-' + status.toLowerCase().normalize('NFD').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, '-');
         }
@@ -3443,17 +3244,12 @@
                 return;
             }
 
-            // Agrupar por data (dia/mês/ano) e ordenar por data mais próxima
             const groups = {};
-
             appointments.forEach(app => {
-                if (!groups[app.date]) {
-                    groups[app.date] = [];
-                }
+                if (!groups[app.date]) groups[app.date] = [];
                 groups[app.date].push(app);
             });
 
-            // Ordenar datas da mais próxima para a mais distante
             const sortedDates = Object.keys(groups).sort((a, b) => {
                 const partsA = a.split('/').map(Number);
                 const partsB = b.split('/').map(Number);
@@ -3462,9 +3258,8 @@
                 return dateA - dateB;
             });
 
-            // Nomes dos dias da semana
             const weekDays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
-            const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+            const monthNamesFull = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 
             let html = '';
             sortedDates.forEach(dateStr => {
@@ -3472,27 +3267,21 @@
                 const parts = dateStr.split('/').map(Number);
                 const dateObj = new Date(parts[2], parts[1] - 1, parts[0]);
                 const dayName = weekDays[dateObj.getDay()];
-                const monthName = monthNames[parts[1] - 1];
+                const monthName = monthNamesFull[parts[1] - 1];
 
-                // Ordenar agendamentos do dia por horário
                 dayApps.sort((a, b) => {
                     const timeA = a.time.split(':').map(Number);
                     const timeB = b.time.split(':').map(Number);
                     return (timeA[0] * 60 + timeA[1]) - (timeB[0] * 60 + timeB[1]);
                 });
 
-                let dayTotal = 0;
-
-                dayApps.forEach(app => {
-                    dayTotal += app.total;
-                });
+                let dayTotal = dayApps.reduce((sum, app) => sum + Number(app.total || 0), 0);
 
                 html += '<div class="day-card">';
                 html += '<div class="day-header">';
                 html += '<div class="day-title">' + dayName + ', ' + parts[0] + ' de ' + monthName + '</div>';
                 html += '<div class="day-count">' + dayApps.length + ' agendamentos</div>';
                 html += '</div>';
-
                 html += '<div class="day-appointments">';
                 dayApps.forEach(app => {
                     html += '<div class="day-appointment-item">';
@@ -3502,7 +3291,7 @@
                     html += '<div class="app-services">' + app.services + '</div>';
                     html += '<div class="app-phone">' + app.phone + '</div>';
                     html += '</div>';
-                    html += '<div class="app-price">R$ ' + app.total.toFixed(2).replace('.', ',') + '</div>';
+                    html += '<div class="app-price">R$ ' + Number(app.total || 0).toFixed(2).replace('.', ',') + '</div>';
                     html += '<div class="app-actions">';
                     html += '<button class="btn-done-small" onclick="markAppointmentDone(\'' + app.id + '\')">Marcar feito</button>';
                     html += '<button type="button" class="btn-delete-small" onclick="openDeleteModal(\'' + app.id + '\')">Excluir</button>';
@@ -3510,12 +3299,9 @@
                     html += '</div>';
                 });
                 html += '</div>';
-
-                // Barra de totais do dia
                 html += '<div class="day-total-bar">';
                 html += '<span class="day-total-label">Total do dia: <span class="day-total-value">R$ ' + dayTotal.toFixed(2).replace('.', ',') + '</span></span>';
                 html += '</div>';
-
                 html += '</div>';
             });
 
@@ -3536,7 +3322,7 @@
                 months[monthKey].apps.push(app);
             });
 
-            const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+            const monthNamesFull = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
             const sortedMonths = Object.values(months).sort((a, b) => a.year - b.year || a.month - b.month);
             if (sortedMonths.length === 0) {
                 container.innerHTML = '<div class="day-empty">Nenhum registro no histórico.</div>';
@@ -3552,7 +3338,7 @@
                     '<button type="button" class="btn-delete-small" onclick="openDeleteModal(\'' + app.id + '\')">Excluir</button></div>'
                 ).join('');
 
-                return '<div class="history-month"><div class="history-month-header"><span>' + monthNames[group.month - 1] + ' ' + group.year + '</span><span>' + doneApps.length + ' feitos</span></div>' +
+                return '<div class="history-month"><div class="history-month-header"><span>' + monthNamesFull[group.month - 1] + ' ' + group.year + '</span><span>' + doneApps.length + ' feitos</span></div>' +
                     '<div class="history-summary-row"><span>Cortes feitos</span><strong>' + doneApps.length + ' | R$ ' + doneTotal.toFixed(2).replace('.', ',') + '</strong></div>' +
                     (items ? '<div class="history-items">' + items + '</div>' : '') + '</div>';
             }).join('');
@@ -3561,11 +3347,10 @@
         function refreshAppointments() {
             getAppointmentsFS().then(() => {
                 renderAdminTable();
+                renderAdminCalendar();
                 showToast('Atualizado!', 'Lista de agendamentos atualizada.');
             });
         }
-
-
 
         function copyBarberPix() {
             const pixKey = '38999390267';
@@ -3576,23 +3361,6 @@
             });
         }
 
-        // Sincroniza entre abas/janelas do navegador
-        window.addEventListener('storage', function (e) {
-            if (e.key === 'barbearia_appointments') {
-                getAppointmentsFS().then(() => {
-                    renderAdminTable();
-                    renderTimeSlots();
-                    updateSummary();
-                });
-            }
-            if (e.key === 'barbearia_availability') {
-                getAvailabilityFS().then(() => {
-                    renderTimeSlots();
-                    renderAvailabilityEditor();
-                });
-            }
-        });
-
         function showToast(title, message) {
             document.getElementById('toast-title').textContent = title;
             document.getElementById('toast-message').textContent = message;
@@ -3602,11 +3370,8 @@
         }
 
         document.addEventListener('DOMContentLoaded', function () {
-            setTimeout(() => {
-                openLoginModal();
-            }, 300);
+            setTimeout(() => { openLoginModal(); }, 300);
         });
-
 
         // ========== MENU DE SEÇÕES ==========
         function showAdminSection(name) {
@@ -3616,9 +3381,7 @@
             document.querySelectorAll('.admin-menu-item').forEach(function (i) {
                 i.classList.toggle('active', i.dataset.section === name);
             });
-            if (name === 'historico') {
-                showHistory();
-            }
+            if (name === 'historico') showHistory();
         }
 
         // ========== CALENDÁRIO ADMIN ==========
@@ -3631,12 +3394,13 @@
             const firstDay = new Date(year, month, 1).getDay();
             const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-            document.getElementById('admin-calendar-month').textContent = monthNames[month] + ' ' + year;
+            const monthEl = document.getElementById('admin-calendar-month');
+            if (monthEl) monthEl.textContent = monthNames[month] + ' ' + year;
 
             const container = document.getElementById('admin-calendar-days');
+            if (!container) return;
             container.innerHTML = '';
 
-            // Espaços vazios antes do primeiro dia
             for (let i = 0; i < firstDay; i++) {
                 const div = document.createElement('div');
                 div.className = 'admin-calendar-day empty';
@@ -3646,7 +3410,6 @@
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
-            // Contar agendamentos por dia
             const appointmentsByDay = {};
             _appointmentsCache.forEach(app => {
                 if (!isCompletedId(app.id)) {
@@ -3684,7 +3447,6 @@
                 dot.className = 'day-dot';
                 div.appendChild(dot);
 
-                // Verifica se está selecionado
                 if (adminSelectedDate &&
                     adminSelectedDate.getDate() === day &&
                     adminSelectedDate.getMonth() === month &&
@@ -3731,21 +3493,19 @@
                 return;
             }
 
-            // Ordenar por horário
             dayApps.sort((a, b) => {
                 const timeA = a.time.split(':').map(Number);
                 const timeB = b.time.split(':').map(Number);
                 return (timeA[0] * 60 + timeA[1]) - (timeB[0] * 60 + timeB[1]);
             });
 
-            let dayTotal = dayApps.reduce((sum, app) => sum + app.total, 0);
+            let dayTotal = dayApps.reduce((sum, app) => sum + Number(app.total || 0), 0);
 
             let html = '<div class="day-card" style="animation: slideDown 0.3s ease;">';
             html += '<div class="day-header">';
             html += '<div class="day-title">' + dayName + ', ' + date.getDate() + ' de ' + monthName + '</div>';
             html += '<div class="day-count">' + dayApps.length + ' agendamentos</div>';
             html += '</div>';
-
             html += '<div class="day-appointments">';
             dayApps.forEach(app => {
                 html += '<div class="day-appointment-item">';
@@ -3755,7 +3515,7 @@
                 html += '<div class="app-services">' + app.services + '</div>';
                 html += '<div class="app-phone">' + app.phone + '</div>';
                 html += '</div>';
-                html += '<div class="app-price">R$ ' + app.total.toFixed(2).replace('.', ',') + '</div>';
+                html += '<div class="app-price">R$ ' + Number(app.total || 0).toFixed(2).replace('.', ',') + '</div>';
                 html += '<div class="app-actions">';
                 html += '<button class="btn-done-small" onclick="markAppointmentDone(\'' + app.id + '\')">Marcar feito</button>';
                 html += '<button type="button" class="btn-delete-small" onclick="openDeleteModal(\'' + app.id + '\')">Excluir</button>';
@@ -3763,7 +3523,6 @@
                 html += '</div>';
             });
             html += '</div>';
-
             html += '<div class="day-total-bar">';
             html += '<span class="day-total-label">Total do dia: <span class="day-total-value">R$ ' + dayTotal.toFixed(2).replace('.', ',') + '</span></span>';
             html += '</div>';
@@ -3778,14 +3537,6 @@
             renderAdminTable();
             document.getElementById('back-to-calendar').style.display = 'none';
         }
-
-        // Sobrescreve renderAdminTable para também atualizar o calendário
-        const _originalRenderAdminTable = renderAdminTable;
-        renderAdminTable = function () {
-            _originalRenderAdminTable();
-            renderAdminCalendar();
-        };
-
     </script>
 
 </body>
